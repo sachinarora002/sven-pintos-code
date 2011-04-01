@@ -1,0 +1,358 @@
+       	       	     +-------------------------+
+		     |		CS 140	       |
+		     | PROJECT 4: FILE SYSTEMS |
+		     |	   DESIGN DOCUMENT     |
+		     +-------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Sven Auhagen <sauhagen@uchicago.edu>
+
+Since I am a Grad student a worked alone but "teamed up" with:
+
+Lamont Samuels <lamont.samuels@me.com>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+I read through this help project 4 presentation:
+http://courses.cs.vt.edu/~cs3204/spring2007/pintos/Project4SessionSpring2007.pdf
+
+		     INDEXED AND EXTENSIBLE FILES
+		     ============================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+1. in inode.c
+
+1.1 #define INODE_BLOCKS 124
+
+This is the number of direct blocks in an on disk inode
+
+1.2
+int INODE_LIST = BLOCK_SECTOR_SIZE / sizeof(block_sector_t);
+
+This is the number of blocks of the indirect inode blocks
+
+1.3
+struct inode_disk
+  {
+    unsigned number_blocks;             /* Number of blocks allocated sector. */
+    off_t length;                       /* File size in bytes. */
+    unsigned magic;                     /* Magic number. */
+    block_sector_t sector[INODE_BLOCKS]; /* for the block numbers */ 
+    enum file_type type;
+  };
+
+The new inode_disk structure which contains simple information about the file it represents, length, numberofblocks it occupies, 
+a sector array for direct, 1 indirect, and 1 double indirect block.
+
+1.4
+/* On-disk inode list for linked and or double linked lists.
+   Must be exactly BLOCK_SECTOR_SIZE bytes long. */
+struct inode_list
+  {
+    block_sector_t sector[128];		/* for the block numbers */ 
+  };
+
+This represents the linked or double linked block that I store on the disk.
+
+1.5 in struct inode:
+//struct inode_disk data;             /* Inode content. */
+ struct lock inode_lock;
+
+I removed the reference to inode disk in the inode because it will be accessed over the cache and the sector in the inode.
+I added a lock to the structure for synchronization
+
+>> A2: What is the maximum size of a file supported by your inode
+>> structure?  Show your work.
+
+The maximum size of a file is:
+
+A) direct blocks 124
+B) single indirect blocks 128
+C) double indirect blocks 128 * 128
+
+=> 124 + 128 + 128 * 128 = 16636 Blocks which is
+
+	16636 * 512 = 8.517.632 bytes or 8.318 MB
+
+---- SYNCHRONIZATION ----
+
+>> A3: Explain how your code avoids a race if two processes attempt to
+>> extend a file at the same time.
+
+I use the lock in the inode that represents an open file. If one process wants to write at the end of a file, I lock the write section.
+I update the file information after writing is done so the other writing/reading processes don't see the changes until they are all made.
+
+>> A4: Suppose processes A and B both have file F open, both
+>> positioned at end-of-file.  If A reads and B writes F at the same
+>> time, A may read all, part, or none of what B writes.  However, A
+>> may not read data other than what B writes, e.g. if B writes
+>> nonzero data, A is not allowed to see all zeros.  Explain how your
+>> code avoids this race.
+
+I am updating the written information in the inode after writing to the actual file. This way if one process tries to read at the end of file while the other is writing there, he won't see the changes until they are done.
+
+>> A5: Explain how your synchronization design provides "fairness".
+>> File access is "fair" if readers cannot indefinitely block writers
+>> or vice versa.  That is, many processes reading from a file cannot
+>> prevent forever another process from writing the file, and many
+>> processes writing to a file cannot prevent another process forever
+>> from reading the file.
+
+I use a reader and writer int variable in the cache blocks so no one gets blocked. Every thread that wants to write or read just increases the variable before it does and decreases afterwards.
+This prevents eviction of the block and allows multiple reads and writes at the same time. 
+The only time I block someone is when two files want to write at EOF.
+
+---- RATIONALE ----
+
+>> A6: Is your inode structure a multilevel index?  If so, why did you
+>> choose this particular combination of direct, indirect, and doubly
+>> indirect blocks?  If not, why did you choose an alternative inode
+>> structure, and what advantages and disadvantages does your
+>> structure have, compared to a multilevel index?
+
+I support multilevel index up to one doubly indirect block. It is the standard way in linux and easy to manage.
+The blocks can be allocated and extended in a consistent way.
+
+
+			    SUBDIRECTORIES
+			    ==============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+1. in inode.h
+
+enum file_type
+{
+	FILE_FILE,
+	FILE_DIR
+};
+
+This enumeration tells me if an inode is a directory or file
+
+2. in thread.h, structure thread:
+
+struct dir * pwd;  
+
+The current working directory of the thread.
+
+---- ALGORITHMS ----
+
+>> B2: Describe your code for traversing a user-specified path.  How
+>> do traversals of absolute and relative paths differ?
+
+First of all I call a parser function to remove any multiple entries of / in the filename. (in filesys.c, parse_filename()).
+Then I call the function dir_lookup_rec() in directory.c which will do the traversing.
+It will look for a / in the first character of the filename, if it exists I know that I have an absolute path and start at root otherwise I use
+the current working directory as starting point.
+I strtok the filename and walk through the directories in the tokens one by one to see if they are a directory.
+
+
+---- SYNCHRONIZATION ----
+
+>> B4: How do you prevent races on directory entries?  For example,
+>> only one of two simultaneous attempts to remove a single file
+>> should succeed, as should only one of two simultaneous attempts to
+>> create a file with the same name, and so on.
+
+I use the lock in the underlying inode of the directory to lock down the sections of directory add, lookup and remove,
+so only one thread can perform operations on the directory.
+
+>> B5: Does your implementation allow a directory to be removed if it
+>> is open by a process or if it is in use as a process's current
+>> working directory?  If so, what happens to that process's future
+>> file system operations?  If not, how do you prevent it?
+
+I don't allow removal of open directories.
+I check the inode for the opencnt and if it is > 0 I stop removing the directory.
+
+
+---- RATIONALE ----
+
+>> B6: Explain why you chose to represent the current directory of a
+>> process the way you did.
+
+I am saving a struct dir in the thread structure that represent the current working directory.
+This way it is easy for me to use it when a user opens a file or directory with relative pathname.
+I just grab the directory and go from there.
+
+
+			     BUFFER CACHE
+			     ============
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+1. in filesys/cache.c
+
+1.1
+struct cache_block {
+  //block sector on disk
+  block_sector_t bid;
+  //corresponding kernel page
+  void * kpage;
+  //fields to check access and if someone wrote to the page
+  bool dirty; 
+  bool accessed;
+  int reader;
+  int writer;
+
+};
+
+This represents an entry in the cache table.
+It has the corresponding block number on the disk, a kpage for the kernel page where it is stored right now.
+A dirty and accessed variable for writing and eviction and reader and writer are used for synchronization.
+
+1.2
+//how many blocks is one page
+extern int SECPP;
+
+This extern global variable tells me the number of blocks that fit in one kernel page.
+
+1.3
+//cache array
+struct cache_block * cache[cache_size];
+
+This is the actual cache table.
+
+1.4
+//bitmap to identify free entries
+struct bitmap * cache_table;
+
+The bitmap that is used to identify empty entries in the cache table.
+
+1.5
+struct lock cache_globallock;
+
+A global lock to protect the cache table when I add new elements or 
+
+2. in filesys/inode.h
+
+2.1
+//for the read ahead thread
+struct lock lock_readahead;
+
+A lock for the read ahead thread.
+
+2.2
+struct list list_readahead;
+
+A list for the read ahead thread.
+
+
+2.3
+struct condition cond_readahead;
+
+A condition variable to signal the waiting read ahead thread to wake up.
+
+2.4
+//structure for the readahead list
+struct readahead {
+
+	block_sector_t bid;
+	struct list_elem elem;
+
+};
+
+An element in the read ahead list.
+
+---- ALGORITHMS ----
+
+>> C2: Describe how your cache replacement algorithm chooses a cache
+>> block to evict.
+
+I use the second chance algorithm from project 3. Every block has an accessed variable. A prerequisite for a page in order
+to get evicted is that the page has no reader or writer at the moment.
+If the accessed bit is true I reset it to fault and leave the block in the list.
+If one block has a false accessed bit I evict it.
+
+>> C3: Describe your implementation of write-behind.
+
+I down write cache pages back to the file immediatly, I leave them in the cache until they get evicted
+or the write back thread is actrivated.
+For the thread I spawn a new kernel thread that calls timer_sleep and after waking up calls a function,
+to save all dirty cache pages.
+This way the risk of loosing pages due to errors is smaller.
+
+
+>> C4: Describe your implementation of read-ahead.
+
+I have a lock and a condition variable as well as a list for the read ahead thread.
+The read ahead thread is a kernel thread that waits for a signal in a condition variable and if he receives it
+gets the block that he is supposed to read from the read ahead list and calls read in cache.c with it.
+
+If a new page is read, the reading thread adds the next block to read on the read ahead list and signals the read ahead
+thread to wake up on the condition variable.
+
+
+---- SYNCHRONIZATION ----
+
+>> C5: When one process is actively reading or writing data in a
+>> buffer cache block, how are other processes prevented from evicting
+>> that block?
+
+I have two variable reader and writer, which count the number of threads that read or write the block at the moment.
+just when both are 0 a block can get evicted.
+They get increased when a function enters cache_read or write and decreased when they leave the function.
+
+
+>> C6: During the eviction of a block from the cache, how are other
+>> processes prevented from attempting to access the block?
+
+I use the global lock to protect the eviction process as well as the lookup function that finds a block in the cache table, this way it is not possible to read or write from a page when it gets evicted.
+
+---- RATIONALE ----
+
+>> C7: Describe a file workload likely to benefit from buffer caching,
+>> and workloads likely to benefit from read-ahead and write-behind.
+
+When a process needs to access the same part of a file multiple times or when multiple processes access the same part 
+of a file a lot then caching will be a lot faster then reading or writing to the disk directly.
+Also when a process changes a lot of bytes in the same block a cache will be useful to prevent slow reads and writes form the disk.
+Read ahead will have its benefits when a process needs to read contiguous blocks from a file, so from 1 to last byte.
+
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students in future quarters?
+
+>> Any other comments?

@@ -1,0 +1,287 @@
+		     +--------------------------+
+       	       	     |		CS 140		|
+		     | PROJECT 2: USER PROGRAMS	|
+		     | 	   DESIGN DOCUMENT     	|
+		     +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Sven Auhagen <sauhagen@uchicago.edu>
+
+Since I am a Grad student a worked alone but "teamed up" with:
+
+Lamont Samuels <lamont.samuels@me.com>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			   ARGUMENT PASSING
+			   ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+I didn't use any new data structure to handle argument passing.
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+I implemented argument passing in start_process(). I use a strtok_r to tokenize the input filename and read it in a 
+character array in the correct order, filename first and then following all the arguments from first to last.
+In another for loop I read them out and save the arguments on the stack, so that they are in order and save their position in the array that the original argument was in.
+This way I can recycle the array and save the pointer on the stack later on.
+
+I keep a counter when I read in the arguments with strtok_r. The counter is predefinded to 16 for the argc, highest argv, return value and the world_align. 
+I will increase it by the size of the input token + 4 for the pointer that it needs later and check if it reaches the 4kb. 
+At that point I just stp reading in more arguments.
+
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+Strtok has a static pointer to the last string which can cause problems if two processes gets created and strtok was called by one process when a switch happens and the other one starts to call strtok while the other process wasn't finished.
+Strtok_r has a third argument which is a pointer to the string that is supposed to be tokenized further on.
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+The shell can check if the executable file exists before the kernel starts to allocate memory and creates the thread.		
+Creating user space threads is much faster than kernel space threads.
+
+
+			     SYSTEM CALLS
+			     ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+in thread.h:
+
+1)
+struct child 
+{
+	pid_t pid;
+	struct condition child_condition;
+	int returnval;
+	struct list_elem parentelem;  
+	bool alive;          
+};
+
+Purpose:
+This struct is shared by the parent and child to read out the exit status and determine if the child is still alive in process_wait() 
+and wait().
+The contidition variable is used to signal the parent that the child just exited.
+
+2)
+struct thread
+  {
+   ...
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
+    struct file * fd_table[FDTABLE];
+    struct list children;		/* list of children for the thread */
+    struct child * me;			
+#endif
+
+    ...
+  };
+
+Purpose:
+The fd_table saves the file pointer for open files, the filediscriptor is the index of the array.
+The struct list children saves the child struct in 1) for each child that this thread created.
+The struct child me points to the child struct that belongs to this specific thread.
+
+3)
+#define FDTABLE 128
+
+Purpose:
+This is the maximum size of the fd_table in the threads.
+
+4)
+struct lock filesys_lock;
+
+Purpose:
+A lock to prevent filesys access by more than one thread.
+
+5)
+struct lock child_lock;
+
+Purpose:
+A lock for the synchronization in the signal exec.
+
+6)
+struct condition cond_exec;
+
+Purpose:
+A condition for the exec syshandler function.
+
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+Every thread has it's own file descriptor table, that has a maximum.
+The file discriptor is the index in the file table.
+They are unique within each thread but not within the entire OS.
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+I created two functions (void * value_stack() ,void * value_stack_int() ) that take the esp and an offset and check if the pointer is valid, one function for integer and one for all other data types.
+The code checks if the given pointer points in the user memory first and then if it is a NULL pointer.
+If both are not the case then I dereference the pointer with pagedir_get_page which returns NULL if the pointer is not valid.
+If the dereferencing was successfull I will return the pointer to the user data.
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+The most are 1024 because if each pointer of length 4 bytes is on a different page.
+Once if they are all on one single page. 2 bytes of data are always in the same page.
+The only way to improve the numbers is to mage the pages bigger or to have some kind of garbage collection or 
+memory management that could try to keep live data together.
+
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+Wait will take the pid of the child that the thread should wait for. 
+The parent will check it's child list if the child exists and if it is on the list.
+If the function was called with the pid before, then the child will not be on the list anymore.
+If the child is found, the thread will read out the child structure and checks if the thread is still alive.
+If not he can simply return the returnvalue in the structure, otherwise he is calling a condition_wait with the corresponding condition variable, that the child and parent share in the child structure.
+
+When the child exits, it will write the return value in the child structure and calls a condition_signal, so the parent wakes up if he is waiting for the child to exit.
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+I wrote a function to check pointer into user memory that gets called before any locks are required in the system handler functions.
+This way it is easier to handle errors in the memory access. The process_exit() function takes care of freeing any memory that was allocated by the thread as well as signaling the parent that the thread died as well as freeing locks and condition variables.
+
+If for example in write a memory reading for the writing fails the function itself has to release all locks at that were acquired inside the system handler function and call proccess_exit.
+
+For example:
+The create system call.
+All two arguments, the filename and size will be read out with the functions value_stack_int and value_stack that check
+the memory pointer and in case of a bad pointer exit the thread immediatly.
+Afterwards the system handler function checks if the filename is empty and if it is returns with a false success value.
+Now the filesystem lock gets acquired and the filesys_create function will create the function and returns true or false.
+The filesys lock will be freed and the successvalue returned.
+
+
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+I have a condition variable in the exec function, so the parent thread calls cond_wait after the creation.
+The thread structure for the child gets set up no matter if the file can be loaded or not.
+This way the child structure associated with the child and parent will be allocated.
+If the child was loaded successfully it will just call cond_signal on the corresponding condition variable,
+if it failed it will change the pid variable in the structure to -1 and the calls cond_signal.
+The parent checks for the pid variabel and then gives it back, if it fails it will also remove the child structure.
+
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+I have a condition variable to ensure synchronization if the parent calls wait(C) before C exits.
+After C exits the boolean alive in the child struct will be set to false and the parent returns the exit status.
+When the child exits, all it's ressources will be freed. The parent will call free() on the child structure after reading out
+the exit status and frees the rest of the memory associated with both threads.
+
+If P exits before the C he will read out all the Children from his children list and free all structures.
+This part of the code is locked with a lock as well as the access to it from the child in the exit system call to ensure that there
+are no race conditions. The child checks in the exit system call if the structure is =! NULL if it has to write it's exit status in it.
+This case also covers after C exits because the memory of the child structure will be freed either way.
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+It was easier to implement and since I am working alone on the OS project I had not time to figure out the smarter way.
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+My design is limited to a maximum, a list would have solved that problem.
+On the other hand I can recycle file descriptors which would have been a lot harder with a list.
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+I didn't change it, to keep it simple.
+It is easier to seperate kernel processes and user processes from each other if we have a different mapping.
+If a process has multiple threads the one to one mapping is not working anymore since they have the same pid but all
+threads have a different tid.
+
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
